@@ -1,5 +1,6 @@
 #! /usr/bin/env python3
 # import mechanize
+import brotlicffi
 from bs4 import BeautifulSoup
 import requests
 import re
@@ -9,7 +10,8 @@ from datetime import datetime
 import sys
 
 def getPage(url):
-  response = requests.get(url);
+  headers={'Accept-Encoding': 'deflate, gzip, zstd'}
+  response = requests.get(url, headers=headers);
   return response.text
 
 #################################
@@ -67,6 +69,19 @@ def get_epoch(date):
   else:
     return 1
 
+# like isspace(), but also counts '-' and '_' as space characters
+def isseparator(my_string):
+  if my_string.isspace():
+    return True
+  else:
+    retval=True
+    for c in my_string:
+      if c.isspace() or c == '-' or c == '_':
+        retval = retval and True
+      else:
+        return False
+    return retval
+
 def grab_comic(soup):
   comic=soup.find(id="comic")
   children=comic.findChildren("img", recursive=True)
@@ -76,7 +91,49 @@ def grab_comic(soup):
     postdate=datetime.strptime(posted_on, "%B %d, %Y")
     epoch=get_epoch(postdate)
     # number=
-    filename=str(epoch).zfill(2) + '.' + url.rpartition('/')[2]
+    filename=url.rpartition('/')[2]
+
+    # Some of this comic's filenames don't seem to follow the
+    # 'chapter number' rule (like epoch 1, chapters 217 to 222, which use
+    # names like '5cNJ56B' and 'ih6WxnB'. Seems rather imgur-like...
+    # Anyway, on account of this, we need to try to verify numbers from
+    # page titles if isdigit() returns False on the first part of the
+    # file's 'basename.'
+    #
+    # Confusingly, some basenames also have quirks, like epoch 0's chapter
+    # 158, which has a filename of '158-1.png'. Or even stranger, like
+    # epoch 0's chapter 70 ('070-e1495602194445').
+    #
+    # My compromise is to allow for files starting with a 1-3 digit decimal
+    # number, then a dash, then anything else. If a filename does not match
+    # that format, then we try to extract the chapter number from the page
+    # title, and append the original filename after the chapter number
+    # that we just extracted from the page title.
+    
+    # remove file extension
+    filebasename=filename.rpartition('.')[0]
+
+    # find first number in the page title (if any)
+    title_text=soup.find('title')
+    title_text=title_text
+    if title_text and title_text.text.startswith('#'):
+      title_chapter_number=re.search(r'\d+', str(title_text.text))
+    else:
+      title_chapter_number=None
+
+    # if match found, extract the number we located
+    if title_chapter_number:
+      title_chapter_number=title_chapter_number.group()
+
+    # we assume that chapter numbers are under three digits for now... might
+    # need to change in future
+    # if (not title_chapter_number.isdigit()) or (len(title_chapter_number) > 3):
+    # prepend to filename
+    if title_chapter_number:
+      filename = title_chapter_number + '_' + filename
+    
+
+    filename=str(epoch).zfill(2) + '.' + filename
     title=soup.title.string.rpartition(' – SoggyCardboard')[0]
     save_image(url, filename, title)
     
@@ -124,6 +181,7 @@ while len(urls) > 0:
   url=urls.pop()
   i=0
   while i < many and url:
+    print(url)
     document = getPage( url )
     soup = BeautifulSoup(document, 'html.parser')
     grab_comic(soup)
